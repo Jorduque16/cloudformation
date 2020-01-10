@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Cloudformation Dashboard Example
+
+Parameters:
+    DashboardName:
+        Description: "The CloudWatch dashboard name."
+        Type: "String"
+    FunctionName:
+        Description: "The Lambda function name."
+        Type: "String"
+
+Globals:
+    Function:
+        Timeout: 300
+
+Resources:
+
+    GetItemFunction:
+        Type: AWS::Serverless::Function
+        Properties:
+            CodeUri: src/
+            Handler: app.lambda_handler
+            Runtime: python3.7
+            Role: !GetAtt LambdaIAMRole.Arn
+            FunctionName: !Ref FunctionName
+            Events:
+                HelloWorld:
+                    Type: Api
+                    Properties:
+                        Path: /item
+                        Method: get
+            Tags:
+              Service: Example
+
+    CloudWatchLogsPolicy:
+      Type: AWS::IAM::ManagedPolicy
+      Properties:
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action:
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:PutLogEvents'
+              Resource: '*'
+
+    LambdaIAMRole:
+      Type: AWS::IAM::Role
+      Properties:
+        ManagedPolicyArns:
+          - !Ref CloudWatchLogsPolicy
+        RoleName: !Join ['-',[!Ref 'AWS::StackName', 'lambda', 'role']]
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - "lambda.amazonaws.com"
+              Action:
+                - "sts:AssumeRole"
+        Path: /
+
+    LogGroup:
+      Type: "AWS::Logs::LogGroup"
+      Properties:
+        LogGroupName: !Join ["", ["/aws/lambda/", !Ref FunctionName]]
+        RetentionInDays: 7
+
+    SuccessHttpResponseMetricFilter:
+      Type: "AWS::Logs::MetricFilter"
+      DependsOn: LogGroup
+      Properties:
+        LogGroupName: !Join ["", ["/aws/lambda/", !Ref FunctionName]]
+        FilterPattern: "{ $.statusCode = 200}"
+        MetricTransformations:
+          - MetricValue: "1"
+            MetricNamespace: !Ref 'AWS::StackName'
+            MetricName: "SuccessResponseCount"
+
+
+    ServerErrorMetricFilter:
+      Type: "AWS::Logs::MetricFilter"
+      DependsOn: LogGroup
+      Properties:
+        LogGroupName: !Join ["", ["/aws/lambda/", !Ref FunctionName]]
+        FilterPattern: "{ $.statusCode = 500}"
+        MetricTransformations:
+          - MetricValue: "1"
+            MetricNamespace: !Ref 'AWS::StackName'
+            MetricName: "ServerErrorCount"
+
+    ClientErrorMetricFilter:
+      Type: "AWS::Logs::MetricFilter"
+      DependsOn: LogGroup
+      Properties:
+        LogGroupName: !Join ["", ["/aws/lambda/", !Ref FunctionName]]
+        FilterPattern: "{ $.statusCode = 400}"
+        MetricTransformations:
+          - MetricValue: "1"
+            MetricNamespace: !Ref 'AWS::StackName'
+            MetricName: "ClientErrorCount"
+
+    ErrorsAlarm:
+      Type: "AWS::CloudWatch::Alarm"
+      DependsOn: GetItemFunction
+      Properties:
+        AlarmName: "ServerErrorFound"
+        AlarmDescription: "Trigger an alarm if an error is recorded"
+        MetricName: "Errors"
+        Namespace: "AWS/Lambda"
+        Dimensions:
+          - Name: "FunctionName"
+            Value: !Ref FunctionName
+        Statistic: "Sum"
+        Period: 60
+        EvaluationPeriods: 1
+        Threshold: 0
+        ComparisonOperator: "GreaterThanThreshold"
+
+    Dashboard:
+      Type: "AWS::CloudWatch::Dashboard"
+      Properties:
+        DashboardName: !Ref DashboardName
+        DashboardBody: !Sub '{"widgets":[{"type":"metric","x":0,"y":0,"width":12,"height":6,"properties":{"view":"timeSeries","stacked":false,"metrics":[["Example_Dashboard","SuccessResponseCount",{"color":"#2ca02c"}],[".","ServerErrorCount",{"color":"#8c564b"}],[".","ClientErrorCount",{"color":"#9467bd"}]],"region":"$${AWS::Region}","stat":"Sum","period":60,"title":"Item calls","yAxis":{"left":{"min":0}},"legend":{"position":"right"}}}]}'
+
+
+Outputs:
+    BaseUrl:
+      Description: "API Gateway endpoint URL for Prod stage for Hello World function"
+      Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+
+    Dashboard:
+      Description: "Dashboard created to monitor Lambda function"
+      Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home#dashboards:name=${DashboardName}"
